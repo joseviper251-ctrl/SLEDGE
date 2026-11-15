@@ -1,0 +1,520 @@
+--// Load Rayfield
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+    Name = "Sledge Combat Hub",
+    LoadingTitle = "Loading...",
+    LoadingSubtitle = "by you",
+    ConfigurationSaving = {
+        Enabled = true,
+        FolderName = "SledgeHub",
+        FileName = "Config"
+    },
+    KeySystem = false
+})
+
+--// Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Lighting = game:GetService("Lighting")
+local CollectionService = game:GetService("CollectionService")
+
+local LocalPlayer = Players.LocalPlayer
+local Event = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("SledgeSwing")
+
+--========================================================
+--  MAIN TAB
+--========================================================
+local MainTab = Window:CreateTab("Main", 4483362458)
+
+MainTab:CreateParagraph({
+    Title = "Auto Lock",
+    Content = "To use auto lock use /e stareat (username) — it can be abbreviated. Example: /e stareat bo locks onto a player named bob. Run /e stareat with no name to stop."
+})
+
+--========================================================
+--  STARE AT (chat command: /e stareat username)
+--========================================================
+local stareConn = nil
+local stareTarget = nil
+
+local function getRoot()
+    local char = LocalPlayer.Character
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getHumanoid()
+    local char = LocalPlayer.Character
+    if not char then return nil end
+    return char:FindFirstChildOfClass("Humanoid")
+end
+
+local function findPlayer(name)
+    if not name then return nil end
+    name = string.lower(name)
+    for _, p in ipairs(Players:GetPlayers()) do
+        if string.lower(p.Name) == name then return p end
+    end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if string.lower(p.DisplayName) == name then return p end
+    end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if string.sub(string.lower(p.Name), 1, #name) == name then return p end
+    end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if string.sub(string.lower(p.DisplayName), 1, #name) == name then return p end
+    end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if string.find(string.lower(p.Name), name, 1, true) then return p end
+    end
+    return nil
+end
+
+local function stareAt(targetPos)
+    local root = getRoot()
+    if not root then return end
+    local flat = Vector3.new(targetPos.X, root.Position.Y, targetPos.Z)
+    if (flat - root.Position).Magnitude < 0.01 then return end
+    root.CFrame = CFrame.lookAt(root.Position, flat)
+end
+
+local function startStareLoop()
+    if stareConn then return end
+    stareConn = RunService.RenderStepped:Connect(function()
+        if not stareTarget then return end
+        local player = Players:FindFirstChild(stareTarget)
+        if not player then return end
+        local char = player.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            stareAt(hrp.Position)
+        end
+    end)
+end
+
+local function stopStareLoop()
+    if stareConn then stareConn:Disconnect(); stareConn = nil end
+    local hum = getHumanoid()
+    if hum then hum.AutoRotate = true end
+end
+
+local function onChat(message, _)
+    if message == "/e stareat" or message == "/e stareat " then
+        stareTarget = nil
+        stopStareLoop()
+        return
+    end
+
+    local match = string.match(message, "^/e stareat%s+(.+)$")
+    if match then
+        local targetName = string.match(match, "^%S+") or match
+        local player = findPlayer(targetName)
+        if player and player ~= LocalPlayer then
+            stareTarget = player.Name
+            local hum = getHumanoid()
+            if hum then hum.AutoRotate = false end
+            startStareLoop()
+        end
+    end
+end
+
+LocalPlayer.Chatted:Connect(onChat)
+
+--========================================================
+--  KILL AURA
+--========================================================
+local AuraTab = Window:CreateTab("Combat", 4483362458)
+
+local auraState = {
+    enabled = false,
+    range = 15,
+    cooldown = 0.35
+}
+
+local auraConn
+local lastSwing = 0
+
+local function getSledge()
+    local char = LocalPlayer.Character
+    if not char then return nil end
+    for _, c in ipairs(char:GetChildren()) do
+        if c:IsA("Tool") and string.find(string.lower(c.Name), "sledge", 1, true) then
+            return c
+        end
+    end
+    return nil
+end
+
+local function getClosestInRange(root)
+    local best, bestDist = nil, math.huge
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local char = player.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if hum and hrp and hum.Health > 0 then
+                local d = (hrp.Position - root.Position).Magnitude
+                if d <= auraState.range and d < bestDist then
+                    best, bestDist = hrp, d
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function fireSwing()
+    local now = tick()
+    if now - lastSwing < auraState.cooldown then return end
+    lastSwing = now
+
+    local tool = getSledge()
+    if tool then tool:Activate() end
+    Event:FireServer("Begin", 5)
+end
+
+local function startAura()
+    auraConn = RunService.Heartbeat:Connect(function()
+        local root = getRoot()
+        if not root then return end
+        if getClosestInRange(root) then
+            fireSwing()
+        end
+    end)
+end
+
+local function stopAura()
+    if auraConn then auraConn:Disconnect(); auraConn = nil end
+end
+
+AuraTab:CreateToggle({
+    Name = "Kill Aura (Auto Swing)",
+    CurrentValue = false, Flag = "AuraEnabled",
+    Callback = function(value)
+        auraState.enabled = value
+        if value then startAura() else stopAura() end
+    end
+})
+
+AuraTab:CreateSlider({
+    Name = "Aura Range",
+    Range = {5, 50}, Increment = 1, Suffix = "studs",
+    CurrentValue = 15, Flag = "AuraRange",
+    Callback = function(value) auraState.range = value end
+})
+
+AuraTab:CreateSlider({
+    Name = "Swing Cooldown",
+    Range = {0.1, 1}, Increment = 0.05, Suffix = "s",
+    CurrentValue = 0.35, Flag = "AuraCooldown",
+    Callback = function(value) auraState.cooldown = value end
+})
+
+--========================================================
+--  FULLBRIGHT
+--========================================================
+local VisualTab = Window:CreateTab("Visuals", 4483362458)
+
+local fbRunning = false
+local fbConnections = {}
+local fbSaved = nil
+
+local function applyFullbright()
+    if not fbRunning then return end
+    Lighting.Ambient = Color3.fromRGB(255, 255, 255)
+    Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
+    Lighting.Brightness = 3
+    Lighting.ClockTime = 14
+    Lighting.GlobalShadows = false
+    Lighting.FogEnd = 1e15
+    Lighting.FogStart = 0
+    for _, d in ipairs(Lighting:GetDescendants()) do
+        if d:IsA("Atmosphere") then
+            d.Density = 0
+            d.Haze = 0
+            d.Glare = 0
+            d.Offset = 0
+        elseif d:IsA("Sky") then
+            d.SunAngularSize = 0
+            d.MoonAngularSize = 0
+        end
+    end
+end
+
+local function startFullbright()
+    if fbRunning then return end
+    fbRunning = true
+    fbSaved = {
+        Ambient = Lighting.Ambient,
+        OutdoorAmbient = Lighting.OutdoorAmbient,
+        Brightness = Lighting.Brightness,
+        ClockTime = Lighting.ClockTime,
+        GlobalShadows = Lighting.GlobalShadows,
+        FogEnd = Lighting.FogEnd,
+        FogStart = Lighting.FogStart
+    }
+    applyFullbright()
+    table.insert(fbConnections, Lighting:GetPropertyChangedSignal("Ambient"):Connect(applyFullbright))
+    table.insert(fbConnections, Lighting:GetPropertyChangedSignal("OutdoorAmbient"):Connect(applyFullbright))
+    table.insert(fbConnections, Lighting:GetPropertyChangedSignal("Brightness"):Connect(applyFullbright))
+    table.insert(fbConnections, Lighting:GetPropertyChangedSignal("FogEnd"):Connect(applyFullbright))
+    table.insert(fbConnections, Lighting.DescendantAdded:Connect(function(d)
+        task.defer(applyFullbright)
+    end))
+    local lastScan = 0
+    table.insert(fbConnections, RunService.Heartbeat:Connect(function(dt)
+        if not fbRunning then return end
+        lastScan += dt
+        if lastScan >= 0.5 then
+            lastScan = 0
+            applyFullbright()
+        end
+    end))
+end
+
+local function stopFullbright()
+    if not fbRunning then return end
+    fbRunning = false
+    for _, c in ipairs(fbConnections) do c:Disconnect() end
+    table.clear(fbConnections)
+    if fbSaved then
+        Lighting.Ambient = fbSaved.Ambient
+        Lighting.OutdoorAmbient = fbSaved.OutdoorAmbient
+        Lighting.Brightness = fbSaved.Brightness
+        Lighting.ClockTime = fbSaved.ClockTime
+        Lighting.GlobalShadows = fbSaved.GlobalShadows
+        Lighting.FogEnd = fbSaved.FogEnd
+        Lighting.FogStart = fbSaved.FogStart
+        fbSaved = nil
+    end
+end
+
+VisualTab:CreateToggle({
+    Name = "Fullbright",
+    CurrentValue = false, Flag = "Fullbright",
+    Callback = function(value)
+        if value then startFullbright() else stopFullbright() end
+    end
+})
+
+--========================================================
+--  ESP
+--========================================================
+local EspTab = Window:CreateTab("ESP", 4483362458)
+
+local function makePlayerEsp(highlightName, color, shouldHighlight)
+    local running = false
+    local connections = {}
+    local lastScan = 0
+    local SCAN_INTERVAL = 0.5
+
+    local function setHighlight(player, enabled)
+        local char = player.Character
+        if not char then return end
+        local hl = char:FindFirstChild(highlightName)
+        if enabled then
+            if not hl then
+                hl = Instance.new("Highlight")
+                hl.Name = highlightName
+                hl.FillColor = color
+                hl.OutlineColor = color
+                hl.FillTransparency = 0.5
+                hl.OutlineTransparency = 0
+                hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                hl.Adornee = char
+                hl.Parent = char
+            end
+        elseif hl then
+            hl:Destroy()
+        end
+    end
+
+    local function update()
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then
+                setHighlight(player, shouldHighlight(player))
+            end
+        end
+    end
+
+    local mod = {}
+
+    function mod.start()
+        if running then return end
+        running = true
+        table.insert(connections, RunService.Heartbeat:Connect(function(dt)
+            if not running then return end
+            lastScan += dt
+            if lastScan >= SCAN_INTERVAL then
+                lastScan = 0
+                update()
+            end
+        end))
+        update()
+    end
+
+    function mod.stop()
+        if not running then return end
+        running = false
+        for _, c in ipairs(connections) do c:Disconnect() end
+        table.clear(connections)
+        for _, player in ipairs(Players:GetPlayers()) do
+            setHighlight(player, false)
+        end
+    end
+
+    return mod
+end
+
+local function holdsSledge(player)
+    local char = player.Character
+    if char then
+        for _, c in ipairs(char:GetChildren()) do
+            if c:IsA("Tool") and string.find(string.lower(c.Name), "sledge", 1, true) then
+                return true
+            end
+        end
+    end
+    local bp = player:FindFirstChildOfClass("Backpack")
+    if bp then
+        for _, c in ipairs(bp:GetChildren()) do
+            if c:IsA("Tool") and string.find(string.lower(c.Name), "sledge", 1, true) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local sledgeEsp = makePlayerEsp("SledgeESP", Color3.fromRGB(255, 0, 0), function(player)
+    return holdsSledge(player)
+end)
+
+local allPlayersEsp = makePlayerEsp("AllPlayersESP", Color3.fromRGB(0, 120, 255), function(player)
+    return true
+end)
+
+--========================================================
+--  TRAP ESP (optimized)
+--========================================================
+local trapEsp = {}
+do
+    local HIGHLIGHT_NAME = "TrapESP"
+    local COLOR = Color3.fromRGB(255, 0, 0)
+    local TAGS = { "ActiveBearTrap", "SledgeKiller" }
+    local running = false
+    local connections = {}
+    local tracked = {}   -- [instance] = highlight
+
+    local function isPlayerCharacter(inst)
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p.Character and (inst == p.Character or inst:IsDescendantOf(p.Character)) then
+                return true
+            end
+        end
+        return false
+    end
+
+    local function addHighlight(inst)
+        if tracked[inst] and tracked[inst].Parent then return end
+        if isPlayerCharacter(inst) then return end
+
+        local hl = Instance.new("Highlight")
+        hl.Name = HIGHLIGHT_NAME
+        hl.FillColor = COLOR
+        hl.OutlineColor = COLOR
+        hl.FillTransparency = 0.5
+        hl.OutlineTransparency = 0
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.Adornee = inst
+        hl.Parent = inst
+        tracked[inst] = hl
+    end
+
+    local function removeHighlight(inst)
+        local hl = tracked[inst]
+        if hl then
+            hl:Destroy()
+            tracked[inst] = nil
+        end
+    end
+
+    -- called by tag signals, no scanning
+    local function onTagged(inst)
+        if not running then return end
+        if inst:IsA("BasePart") or inst:IsA("Model") then
+            addHighlight(inst)
+        end
+    end
+
+    local function onUntagged(inst)
+        removeHighlight(inst)
+    end
+
+    -- one-time scan for already-existing traps
+    local function initialScan()
+        for _, tag in ipairs(TAGS) do
+            for _, inst in ipairs(CollectionService:GetTagged(tag)) do
+                if inst:IsA("BasePart") or inst:IsA("Model") then
+                    addHighlight(inst)
+                end
+            end
+        end
+    end
+
+    function trapEsp.start()
+        if running then return end
+        running = true
+
+        for _, tag in ipairs(TAGS) do
+            table.insert(connections, CollectionService:GetInstanceAddedSignal(tag):Connect(onTagged))
+            table.insert(connections, CollectionService:GetInstanceRemovedSignal(tag):Connect(onUntagged))
+        end
+
+        initialScan()
+    end
+
+    function trapEsp.stop()
+        if not running then return end
+        running = false
+        for _, c in ipairs(connections) do c:Disconnect() end
+        table.clear(connections)
+        for inst, hl in pairs(tracked) do
+            hl:Destroy()
+        end
+        table.clear(tracked)
+    end
+end
+
+EspTab:CreateToggle({
+    Name = "Sledge ESP",
+    CurrentValue = false, Flag = "EspSledge",
+    Callback = function(value)
+        if value then sledgeEsp.start() else sledgeEsp.stop() end
+    end
+})
+
+EspTab:CreateToggle({
+    Name = "All Players ESP",
+    CurrentValue = false, Flag = "EspAllPlayers",
+    Callback = function(value)
+        if value then allPlayersEsp.start() else allPlayersEsp.stop() end
+    end
+})
+
+EspTab:CreateToggle({
+    Name = "Trap ESP",
+    CurrentValue = false, Flag = "EspTrap",
+    Callback = function(value)
+        if value then trapEsp.start() else trapEsp.stop() end
+    end
+})
+
+--// Notify
+Rayfield:Notify({
+    Title = "Sledge Combat Hub",
+    Content = "Loaded. Type /e stareat <username> to stare.",
+    Duration = 5
+})
